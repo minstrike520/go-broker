@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"math/rand"
 	"net"
 	"os"
 	"strings"
@@ -17,6 +18,11 @@ type PacketType string
 const (
 	PUBLISH   PacketType = "PUBLISH"
 	SUBSCRIBE PacketType = "SUBSCRIBE"
+	REPLICATE PacketType = "REPLICATE"
+	CLEAR     PacketType = "CLEAR"
+	ACK       PacketType = "ACK"
+	PING      PacketType = "PING"
+	PONG      PacketType = "PONG"
 )
 
 // Packet represents a message packet with header and payload
@@ -34,10 +40,14 @@ type Broker struct {
 	closeConns   chan net.Conn
 	subscribers  map[string][]net.Conn // topic -> list of subscriber connections
 	subscriberMu sync.Mutex
+	backupAddr   string
+	backupConn   net.Conn
+	backupMu     sync.Mutex
+	isPrimary    bool
 }
 
 // NewBroker creates a new broker instance
-func NewBroker(addr string) (*Broker, error) {
+func NewBroker(addr string, backupAddr string, isPrimary bool) (*Broker, error) {
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, err
@@ -48,6 +58,8 @@ func NewBroker(addr string) (*Broker, error) {
 		packets:     make(chan Packet, 10),
 		closeConns:  make(chan net.Conn, 10),
 		subscribers: make(map[string][]net.Conn),
+		backupAddr:  backupAddr,
+		isPrimary:   isPrimary,
 	}, nil
 }
 
@@ -67,6 +79,8 @@ func (b *Broker) Start() {
 
 // applicationLogic handles the broker logic (routing messages to subscribers)
 func (b *Broker) applicationLogic() {
+	replicatedMessages := make(map[string]bool) // Store replicated messages (topic|payload)
+
 	for {
 		select {
 		case packet := <-b.packets:
@@ -75,6 +89,20 @@ func (b *Broker) applicationLogic() {
 				b.handleSubscribe(packet)
 			case PUBLISH:
 				b.handlePublish(packet)
+			case REPLICATE:
+				// Backup receives replication
+				if !b.isPrimary {
+					key := packet.topic + "|" + packet.payload
+					replicatedMessages[key] = true
+					fmt.Printf("Replicated message: %s -> %s\n", packet.topic, packet.payload)
+				}
+			case CLEAR:
+				// Backup clears message after Primary processed it
+				if !b.isPrimary {
+					key := packet.topic + "|" + packet.payload
+					delete(replicatedMessages, key)
+					fmt.Printf("Cleared replicated message: %s -> %s\n", packet.topic, packet.payload)
+				}
 			}
 		case conn := <-b.closeConns:
 			b.handleDisconnect(conn)
@@ -96,6 +124,11 @@ func (b *Broker) handleSubscribe(packet Packet) {
 
 // handlePublish forwards message to all subscribers of the topic
 func (b *Broker) handlePublish(packet Packet) {
+	// Pseudo computing: 50-150ms uniform distribution
+	computeTime := 50 + rand.Intn(101) // 50 to 150 ms
+	fmt.Printf("Computing for %d ms...\n", computeTime)
+	time.Sleep(time.Duration(computeTime) * time.Millisecond)
+
 	b.subscriberMu.Lock()
 	subscribers := b.subscribers[packet.topic]
 	b.subscriberMu.Unlock()
@@ -111,7 +144,15 @@ func (b *Broker) handlePublish(packet Packet) {
 		}
 	}
 
-	// Publishers disconnect after sending
+	// If Primary, clear message from backup
+	if b.isPrimary && b.backupConn != nil {
+		clearPacket := fmt.Sprintf("CLEAR|%s|%s\n", packet.topic, packet.payload)
+		b.backupMu.Lock()
+		b.backupConn.Write([]byte(clearPacket))
+		b.backupMu.Unlock()
+	}
+
+	// Publishers disconnect after sending (send ACK before closing if it's from publisher)
 	packet.conn.Close()
 	fmt.Println("Publisher disconnected:", packet.conn.RemoteAddr())
 }
@@ -213,6 +254,31 @@ func (b *Broker) proxy() {
 				continue
 			}
 
+			// If Primary receives PUBLISH, replicate to backup first
+			if b.isPrimary && packet.controlType == PUBLISH {
+				if b.backupConn != nil {
+					replicatePacket := fmt.Sprintf("REPLICATE|%s|%s\n", packet.topic, packet.payload)
+					b.backupMu.Lock()
+					_, err := b.backupConn.Write([]byte(replicatePacket))
+					b.backupMu.Unlock()
+					if err != nil {
+						fmt.Println("Error replicating to backup:", err)
+						b.backupConn = nil
+					}
+				}
+
+				// Send ACK to publisher
+				ackPacket := fmt.Sprintf("ACK\n")
+				conn.Write([]byte(ackPacket))
+			}
+
+			// Handle PING from backup
+			if packet.controlType == PING {
+				pongPacket := fmt.Sprintf("PONG\n")
+				conn.Write([]byte(pongPacket))
+				continue
+			}
+
 			b.packets <- packet
 
 			// Remove publisher connections after sending packet
@@ -224,17 +290,51 @@ func (b *Broker) proxy() {
 }
 
 func main() {
-	port := ":8080"
-	if len(os.Args) > 1 {
-		port = ":" + os.Args[1]
+	if len(os.Args) < 2 {
+		fmt.Println("Usage: go run cmd/server/main.go <port> [backup-host:port]")
+		fmt.Println("  If backup address is provided, this will be Primary broker")
+		return
 	}
 
-	broker, err := NewBroker(port)
+	port := ":" + os.Args[1]
+	backupAddr := ""
+	isPrimary := false
+
+	if len(os.Args) > 2 {
+		backupAddr = os.Args[2]
+		isPrimary = true
+	}
+
+	broker, err := NewBroker(port, backupAddr, isPrimary)
 	if err != nil {
 		fmt.Println("Error creating broker:", err)
 		return
 	}
 
-	fmt.Printf("Starting broker on port %s\n", port)
+	// If Primary, connect to Backup
+	if isPrimary && backupAddr != "" {
+		go func() {
+			for {
+				conn, err := net.Dial("tcp", backupAddr)
+				if err != nil {
+					fmt.Println("Failed to connect to backup, retrying in 2s:", err)
+					time.Sleep(2 * time.Second)
+					continue
+				}
+				fmt.Println("Connected to backup broker at", backupAddr)
+				broker.backupMu.Lock()
+				broker.backupConn = conn
+				broker.backupMu.Unlock()
+				break
+			}
+		}()
+	}
+
+	if isPrimary {
+		fmt.Printf("Starting PRIMARY broker on port %s (backup: %s)\n", port, backupAddr)
+	} else {
+		fmt.Printf("Starting BACKUP broker on port %s\n", port)
+	}
+
 	broker.Start()
 }
