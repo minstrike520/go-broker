@@ -91,7 +91,7 @@ func (b *Broker) aliveCheck() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		conn, err := net.DialTimeout("tcp", b.primaryAddr, 500*time.Millisecond)
+		conn, err := net.DialTimeout("tcp", b.primaryAddr, 300*time.Millisecond)
 		if err != nil {
 			b.primaryAliveMu.Lock()
 			if b.primaryAlive {
@@ -106,7 +106,7 @@ func (b *Broker) aliveCheck() {
 
 		// Send PING
 		conn.SetWriteDeadline(time.Now().Add(200 * time.Millisecond))
-		_, err = conn.Write([]byte("PING\n"))
+		_, err = conn.Write([]byte("PING||\n"))
 		if err != nil {
 			conn.Close()
 			b.primaryAliveMu.Lock()
