@@ -6,29 +6,33 @@
 echo "=== Quick Manual Test Setup ==="
 echo ""
 
+A=""
+
+term() {
+    konsole --hold -e bash -c "$1; exec bash" &
+}
+
 # Start Primary broker
 echo "Starting Primary broker on port 8080..."
-gnome-terminal -- bash -c "go run ./cmd/server/main.go 8080 localhost:8081; exec bash" 2>/dev/null || \
-xterm -e "go run ./cmd/server/main.go 8080 localhost:8081" 2>/dev/null || \
-(go run ./cmd/server/main.go 8080 localhost:8081 &)
-
-sleep 2
+term "go run ./cmd/server/main.go 8080 localhost:8081"
+A="$A $!"
+sleep 1
 
 # Start Backup broker
 echo "Starting Backup broker on port 8081..."
-gnome-terminal -- bash -c "go run ./cmd/backup/main.go 8081 localhost:8080; exec bash" 2>/dev/null || \
-xterm -e "go run ./cmd/backup/main.go 8081 localhost:8080" 2>/dev/null || \
-(go run ./cmd/backup/main.go 8081 localhost:8080 &)
+konsole --hold -e bash -c "go run ./cmd/backup/main.go 8081 localhost:8080; exec bash" 2>/dev/null&
+A="$A $!"
+sleep 1
 
-sleep 2
 
 # Start subscriber
 echo "Starting subscriber for topic 'topicC'..."
-gnome-terminal -- bash -c "go run ./cmd/subscriber/main.go topicC localhost:8080 localhost:8081; exec bash" 2>/dev/null || \
-xterm -e "go run ./cmd/subscriber/main.go topicC localhost:8080 localhost:8081" 2>/dev/null || \
-(go run ./cmd/subscriber/main.go topicC localhost:8080 localhost:8081 &)
-
+konsole --hold -e bash -c "go run ./cmd/subscriber/main.go topicC localhost:8080 localhost:8081; exec bash" 2>/dev/null&
+A="$A $!"
 sleep 1
+
+konsole --hold -e bash -c "go run ./cmd/publisher/main.go topicC content localhost:8080 localhost:8081; exec bash" 2>/dev/null&
+A="$A $!"
 
 echo ""
 echo "✓ All components started!"
@@ -45,3 +49,7 @@ echo "3. Kill the Primary broker process to test failover"
 echo ""
 echo "4. Watch the subscriber terminal to see messages continue from Backup"
 echo ""
+
+echo "To kill all windows:"
+
+echo "   kill $A 2>/dev/null"

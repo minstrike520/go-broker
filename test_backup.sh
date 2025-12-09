@@ -16,30 +16,40 @@ echo ""
 echo "Press Enter to start..."
 read
 
+set_tab_name() {
+    echo -ne "\033]30;$1\007"
+}
+
+term() {
+    konsole --hold -e bash -c "echo -ne \"\033]30;$2\007\"; $1; exec bash" &
+}
+
+sleep 3
+
 # Start Primary broker
 echo "Starting Primary broker on port 8080..."
-go run ./cmd/server/main.go 8080 localhost:8081 > primary.log 2>&1 &
+term "go run ./cmd/server/main.go 8080 localhost:8081" "PRIMARY BROKER"
 PRIMARY_PID=$!
 echo "Primary PID: $PRIMARY_PID"
 sleep 2
 
 # Start Backup broker
 echo "Starting Backup broker on port 8081..."
-go run ./cmd/backup/main.go 8081 localhost:8080 > backup.log 2>&1 &
+term "go run ./cmd/backup/main.go 8081 localhost:8080" "BACKUP BROKER"
 BACKUP_PID=$!
 echo "Backup PID: $BACKUP_PID"
 sleep 2
 
 # Start subscriber
 echo "Starting subscriber for topic 'topicC'..."
-go run ./cmd/subscriber/main.go topicC localhost:8080 localhost:8081 > subscriber.log 2>&1 &
+term "go run ./cmd/subscriber/main.go topicC localhost:8080 localhost:8081" "SUBSCRIBER"
 SUBSCRIBER_PID=$!
 echo "Subscriber PID: $SUBSCRIBER_PID"
-sleep 1
+sleep 2
 
 # Start test publisher
 echo "Starting test publisher (10 Hz)..."
-go run ./cmd/test_publisher/main.go topicC localhost:8080 localhost:8081 > publisher.log 2>&1 &
+term "go run ./cmd/test_publisher/main.go topicC localhost:8080 localhost:8081" "PUBLISHER"
 PUBLISHER_PID=$!
 echo "Publisher PID: $PUBLISHER_PID"
 
@@ -64,7 +74,13 @@ echo "Primary broker killed!"
 
 echo ""
 echo "Backup should take over. Observing for 10 more seconds..."
-sleep 10
+
+for i in {10..1}; do
+    # echo -ne "Time until Publisher kill: $i seconds\r"
+    sleep 1
+done
+
+# kill $PUBLISHER_PID
 
 echo ""
 echo "=== Test Complete ==="
@@ -74,8 +90,10 @@ echo "1. Messages 1-300 received from Primary"
 echo "2. Brief gap during failover"
 echo "3. Messages continue from Backup (including resent last 5)"
 echo ""
-echo "Cleaning up..."
-kill $BACKUP_PID $SUBSCRIBER_PID $PUBLISHER_PID 2>/dev/null
-wait 2>/dev/null
 
-echo "Done! Check subscriber.log for received message sequence."
+echo "Done! Press Enter to stop..."
+read
+
+kill $BACKUP_PID $SUBSCRIBER_PID $PUBLISHER_PID 2>/dev/null
+echo "Cleaning up..."
+wait 2>/dev/null
