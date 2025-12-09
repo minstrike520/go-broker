@@ -9,21 +9,25 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("Usage: go run cmd/subscriber/main.go <topic>")
+		fmt.Println("Usage: go run cmd/subscriber/main.go <topic> [broker-host:port]")
 		return
 	}
 
 	topic := os.Args[1]
+	brokerAddr := "localhost:8080"
+	if len(os.Args) > 2 {
+		brokerAddr = os.Args[2]
+	}
 
 	// Connect to the broker
-	conn, err := net.Dial("tcp", "localhost:8080")
+	conn, err := net.Dial("tcp", brokerAddr)
 	if err != nil {
 		fmt.Println("Error connecting to broker:", err)
 		return
 	}
 	defer conn.Close()
 
-	fmt.Printf("Connected to broker. Subscribing to topic: %s\n", topic)
+	fmt.Printf("Connected to broker at %s. Subscribing to topic: %s\n", brokerAddr, topic)
 
 	// Send SUBSCRIBE packet: SUBSCRIBE|TOPIC
 	subscribePacket := fmt.Sprintf("SUBSCRIBE|%s\n", topic)

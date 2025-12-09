@@ -9,8 +9,16 @@ import (
 )
 
 func main() {
+    serverAddr := "localhost:8080"
+    if len(os.Args) > 1 {
+        serverAddr = os.Args[1]
+    }
+
+    fmt.Printf("Usage: go run cmd/client/main.go [host:port]\n")
+    fmt.Printf("Connecting to server at %s\n", serverAddr)
+
     // Connect to the server
-    conn, err := net.Dial("tcp", "localhost:8080")
+    conn, err := net.Dial("tcp", serverAddr)
     if err != nil {
         fmt.Println("Error connecting to server:", err)
         return

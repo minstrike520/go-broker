@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -223,11 +224,17 @@ func (b *Broker) proxy() {
 }
 
 func main() {
-	broker, err := NewBroker(":8080")
+	port := ":8080"
+	if len(os.Args) > 1 {
+		port = ":" + os.Args[1]
+	}
+
+	broker, err := NewBroker(port)
 	if err != nil {
 		fmt.Println("Error creating broker:", err)
 		return
 	}
 
+	fmt.Printf("Starting broker on port %s\n", port)
 	broker.Start()
 }
